@@ -1,0 +1,849 @@
+index.php
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bay Booking System</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+</head>
+<body>
+
+
+<!-- Navbar -->
+<?php include 'navbar.php'; ?>
+
+<?php
+// index.php
+include 'config.php';
+include 'db.php';
+
+date_default_timezone_set('Asia/Kolkata'); // Set timezone
+
+// Get the selected date from query parameters or default to today
+$selected_date = isset($_GET['date']) ? $_GET['date'] : date('Y-m-d');
+
+// Prepare query to fetch the bookings for the selected date
+$query = "SELECT start_time, end_time, ground_type FROM bookings WHERE DATE(proposed_date_time) = ?";
+$stmt = $conn->prepare($query);
+$stmt->bind_param("s", $selected_date);
+$stmt->execute();
+$result = $stmt->get_result();
+
+// Store the booked slots in an array
+$booked_slots = [];
+while ($row = $result->fetch_assoc()) {
+    $start_time = date('H:00:00', strtotime($row['start_time']));
+    $end_time = date('H:00:00', strtotime($row['end_time']));
+    
+    $current_time = strtotime($start_time);
+    $end_time_timestamp = strtotime($end_time);
+    
+    while ($current_time < $end_time_timestamp) {
+        $booked_slots[] = [
+            'start' => date('H:00:00', $current_time),
+            'end'   => date('H:00:00', $end_time_timestamp), // ✅ Ensure 'end' is stored
+            'ground' => $row['ground_type']
+        ];
+        $current_time = strtotime('+1 hour', $current_time);
+    }
+}
+
+$stmt->close();
+
+// Date navigation logic
+$prev_date = date('Y-m-d', strtotime($selected_date . ' -1 day'));
+$next_date = date('Y-m-d', strtotime($selected_date . ' +1 day'));
+$selected_day = date('l', strtotime($selected_date));
+$selected_month = date('m', strtotime($selected_date));
+$selected_year = date('Y', strtotime($selected_date));
+
+// Define available grounds
+$grounds = ['old_bay', 'new_bay', 'eds', 'waste_burning'];
+$mergedCells = [];
+?>
+
+<div class="container mt-4">
+    <h2 class="mb-3 text-center">Bay Booking System</h2>
+    <div class="row">
+        <div class="col-lg-3 col-md-3">
+            <?php include 'calendar.php'; ?>
+            <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newBookingModal">
+                New Booking
+            </button>
+        </div>
+        <div class="col-lg-9 col-md-9">
+        <div class="row">
+                <div class="col-lg-6 col-md-6 d-flex mb-2">
+                    <a href="?date=<?= $prev_date ?>&month=<?= $selected_month ?>&year=<?= $selected_year ?>" class="btn btn-secondary btn-sm">&#9665;</a>
+                    <a class="btn btn-secondary btn-sm"><?= $selected_date ?></a>
+                    <a href="?date=<?= $next_date ?>&month=<?= $selected_month ?>&year=<?= $selected_year ?>" class="btn btn-secondary btn-sm">&#9655;</a>
+                </div>  
+                <div class="col-lg-6 col-md-6 d-flex justify-content-end mb-2">
+                    <a href="" class="btn btn-secondary btn-sm">Day</a>
+                    <a href="" class="btn btn-secondary btn-sm">Month</a>
+                    <a href="" class="btn btn-secondary btn-sm">Year</a>
+                </div>  
+            </div>
+        
+            
+            <table class="table table-bordered table-striped">
+                <thead class="table-dark">
+                <tr>
+                        <th colspan="5" class="text-center">
+                        <a href="?date=<?= $prev_date ?>" class="btn btn-secondary">&#9665;</a>
+                <?= $selected_day ?>, <?= $selected_date ?>
+                <a href="?date=<?= $next_date ?>" class="btn btn-secondary">&#9655;</a>
+                        </th>
+                    </tr>
+                    <tr>
+                        <th>Time</th>
+                        <th>OLD Bay</th>
+                        <th>New Bay</th>
+                        <th>EDS</th>
+                        <th>Waste Burning</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php
+                for ($time = 9; $time < 20; $time++) { // 9 AM - 7 PM
+                    $timeFormatted = sprintf("%02d:00:00", $time);
+                
+                    $endTimeFormatted = sprintf("%02d:00:00", $time); // 1-hour slots
+                    echo "<tr>";
+                    echo "<td>$time:00</td>";
+
+                    foreach ($grounds as $ground) {
+                        if (isset($mergedCells[$ground][$time])) {
+                            continue; // Skip merged cells
+                        }
+
+                        $isBooked = false;
+                        $rowspan = 1;
+
+                        foreach ($booked_slots as $slot) {
+                            if ($slot['ground'] === $ground && $slot['start'] == $timeFormatted) {
+                                $isBooked = true;
+                                $startHour = (int)substr($slot['start'], 0, 2);
+                                $endHour = (int)substr($slot['end'], 0, 2);
+                                $rowspan = $endHour - $startHour;
+
+                                for ($i = 1; $i < $rowspan; $i++) {
+                                    $mergedCells[$ground][$time + $i] = true;
+                                }
+                                break;
+                            }
+                        }
+
+                        if ($isBooked) {
+                            $endTimeFormatted = sprintf("%02d:00:00", $endHour); // Correct end time
+                            echo "<td rowspan='$rowspan' class='bg-danger text-white'>";
+                            echo "<a href='edit_booking.php?start_time=$timeFormatted&end_time=$endTimeFormatted&ground=$ground' class='text-white'>Edit</a>";
+                            echo "</td>";
+                        } else {
+                            echo "<td class='clickable-cell' 
+                            data-bs-toggle='modal' 
+                            data-bs-target='#newBookingModal' 
+                            data-time='$timeFormatted' 
+                            data-ground='$ground'> 
+                        -
+                        </td>";
+                     }
+                        
+                    }
+                    echo "</tr>";
+                }
+                ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+
+
+<!-- New Booking Modal -->
+<div class="modal fade" id="newBookingModal" tabindex="-1" aria-labelledby="newBookingModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <?php include 'new_booking.php'; ?>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+</body>
+</html>
+
+
+*****************************************END of index.php****************************************************
+
+
+
+
+calendar.php
+
+<!-- calendar.php -->
+<!-- calendar.php -->
+<div class="col-lg-3 col-md-3">
+  <div class="calendar-nav d-flex justify-content-between align-items-center">
+    <a href="?month=<?= $month - 1; ?>&year=<?= $year; ?>&date=<?= $selected_date; ?>" class="btn" style="float: right;">&#9665;</a>
+    <h6 class="mb-0"><?= date('F Y', strtotime("$year-$month-01")); ?></h6>
+    <a href="?month=<?= $month + 1; ?>&year=<?= $year; ?>&date=<?= $selected_date; ?>" class="btn" style="float: left;">&#9655;</a>
+  </div>
+
+  <table class="calendar">
+    <thead>
+      <tr>
+        <th>Sun</th>
+        <th>Mon</th>
+        <th>Tue</th>
+        <th>Wed</th>
+        <th>Thu</th>
+        <th>Fri</th>
+        <th>Sat</th>
+      </tr>
+    </thead> 
+    <tbody>
+      <?php
+      $dayCounter = 1;
+      for ($row = 0; $row < 6; $row++) {
+        echo "<tr>";
+        for ($col = 0; $col < 7; $col++) {
+          if ($row === 0 && $col < $firstDayOfMonth || $dayCounter > $daysInMonth) {
+            echo "<td></td>";
+          } else {
+            $date_value = "$year-$month-" . str_pad($dayCounter, 2, '0', STR_PAD_LEFT);
+            $class = ($date_value == $selected_date) ? 'selected-day' : '';
+            $class .= (date('Y-m-d') == $date_value) ? ' current-day' : ''; // Highlight today's date
+            echo "<td class='$class'><a href='?month=$month&year=$year&date=$date_value'>$dayCounter</a></td>";
+            $dayCounter++;
+          }
+        }
+        echo "</tr>";
+        if ($dayCounter > $daysInMonth) break;
+      }
+      ?>
+    </tbody>
+  </table>
+</div>
+
+*****************************************END of calendar.php****************************************************
+
+
+
+config.php
+
+<?php
+// config.php
+define('ROOT_URL', 'http://localhost/ground-booking/index.php');
+
+// Get the current month and year, or use the passed parameters from the URL
+$month = isset($_GET['month']) ? $_GET['month'] : date('m');
+$year = isset($_GET['year']) ? $_GET['year'] : date('Y');
+$selected_date = isset($_GET['date']) ? $_GET['date'] : date('Y-m-d');
+
+// Extract day, month, and year from selected_date
+$selected_timestamp = strtotime($selected_date);
+$selected_day = date('l', $selected_timestamp);
+$selected_day_number = date('j', $selected_timestamp);
+$selected_month = date('m', $selected_timestamp);
+$selected_year = date('Y', $selected_timestamp);
+
+// Previous and Next Day Calculation
+$prev_date = date('Y-m-d', strtotime($selected_date . ' -1 day'));
+$next_date = date('Y-m-d', strtotime($selected_date . ' +1 day'));
+
+// Get Days in Month and First Day of Month
+$daysInMonth = cal_days_in_month(CAL_GREGORIAN, $month, $year);
+$firstDayOfMonth = date('w', strtotime("$year-$month-01"));
+?>
+
+*****************************************END of config.php****************************************************
+
+
+
+
+db.php
+<?php
+// db.php
+$servername = "localhost";
+$username = "root";
+$password = "root123";
+$dbname = "ground_booking_system";
+
+// Create connection
+$conn = new mysqli($servername, $username, $password, $dbname);
+
+// Check connection
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+?>
+*****************************************END of db.php****************************************************
+
+
+
+
+navbar.php
+<nav class="navbar navbar-expand-lg navbar-dark" style="background-color: #007BFF;">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="#">Bay Booking System</a>
+        <form class="d-flex ms-auto me-3">
+                <input class="form-control me-2" type="date" placeholder="Search" aria-label="Search">
+                <button class="btn btn-outline-light" type="submit">Search</button>
+            </form>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            <ul class="navbar-nav ms-auto">
+                <li class="nav-item">
+                    <a class="nav-link active" aria-current="page" href="index.php">Home</a>
+                </li>
+               
+                <li class="nav-item">
+                    <a class="nav-link" href="#">Help</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#">log in</a>
+                </li>
+            </ul>
+        </div>
+    </div>
+</nav>
+*****************************************END of navbar.php****************************************************
+
+
+
+
+
+new_booking.php
+<?php
+// new_booking.php
+
+// Include database connection
+include 'db.php';
+
+// Process the form when it is submitted
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    // Get form data
+    $requisition_no = $_POST['requisition_no'];
+    $date_of_requisition = $_POST['date_of_requisition'];
+    $division = $_POST['division'];
+    $proposed_date_time = $_POST['proposed_date_time'];
+    $start_time = $_POST['start_time'];
+    $end_time = $_POST['end_time'];
+    $ground_type = $_POST['ground_type']; // Selected ground
+
+    // Check if the selected ground is already booked for the chosen time slot
+    // Check if the selected ground is already booked on the chosen date
+// Check if the selected ground is already booked for the chosen date and time slot
+$check_query = "SELECT * FROM bookings WHERE ground_type = ? 
+                AND DATE(proposed_date_time) = ? 
+                AND ((start_time <= ? AND end_time > ?) OR (start_time < ? AND end_time >= ?))";
+
+if ($stmt = $conn->prepare($check_query)) {
+    $stmt->bind_param("ssssss", $ground_type, $proposed_date_time, $end_time, $end_time, $start_time, $start_time);
+    $stmt->execute();
+    $result = $stmt->get_result();
+
+    if ($result->num_rows > 0) {
+        echo "<script>alert('This ground is already booked for the selected time slot. Please choose another time.');</script>";
+    } else {
+        // Proceed with booking
+        $insert_query = "INSERT INTO bookings (requisition_no, date_of_requisition, division, proposed_date_time, start_time, end_time, ground_type) 
+                         VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+        if ($stmt = $conn->prepare($insert_query)) {
+            $stmt->bind_param("sssssss", $requisition_no, $date_of_requisition, $division, $proposed_date_time, $start_time, $end_time, $ground_type);
+            $stmt->execute();
+
+            if ($stmt->affected_rows > 0) {
+                echo "<script>alert('Booking successful!'); window.location.href='index.php';</script>";
+            } else {
+                echo "<script>alert('Error in booking!');</script>";
+            }
+        } else {
+            echo "<script>alert('Error preparing insert query: " . $conn->error . "');</script>";
+        }
+    }
+    $stmt->close();
+} else {
+    echo "<script>alert('Error preparing check query: " . $conn->error . "');</script>";
+}
+
+}
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Booking</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+</head>
+<body>
+
+<!-- Navbar -->
+
+
+<div class="container mt-4">
+    <h2 class="mb-3 text-center">New Booking</h2>
+
+    <!-- Booking Form -->
+    <form action="new_booking.php" method="POST">
+        <div class="mb-3">
+            <label for="requisition_no" class="form-label">Requisition No</label>
+            <input type="text" class="form-control" id="requisition_no" name="requisition_no" required>
+        </div>
+        <div class="mb-3">
+            <label for="date_of_requisition" class="form-label">Date of Requisition</label>
+            <input type="date" class="form-control" id="date_of_requisition" name="date_of_requisition" required>
+        </div>
+        <div class="mb-3">
+            <label for="division" class="form-label">Name of Division</label>
+            <input type="text" class="form-control" id="division" name="division" required>
+        </div>
+        <div class="mb-3">
+            <label for="proposed_date_time" class="form-label">Proposed Date and Time</label>
+            <input type="datetime-local" class="form-control" id="proposed_date_time" name="proposed_date_time" required>
+        </div>
+        <div class="mb-3">
+    <label for="start_time" class="form-label">Start Time</label>
+    <input type="time" class="form-control" id="start_time" name="start_time" min="09:00" max="18:00" required>
+</div>
+
+<div class="mb-3">
+    <label for="end_time" class="form-label">End Time</label>
+    <input type="time" class="form-control" id="end_time" name="end_time" min="09:00" max="18:00" required>
+</div>
+
+<script>
+    // JavaScript to ensure user can only select from 09:00 to 18:00
+    const startTime = document.getElementById('start_time');
+    const endTime = document.getElementById('end_time');
+
+    startTime.addEventListener('focus', function() {
+        this.setAttribute('list', 'time-list');
+    });
+    endTime.addEventListener('focus', function() {
+        this.setAttribute('list', 'time-list');
+    });
+</script>
+
+<!-- Create custom time list -->
+<datalist id="time-list">
+    <option value="09:00">
+    <option value="10:00">
+    <option value="11:00">
+    <option value="12:00">
+    <option value="13:00">
+    <option value="14:00">
+    <option value="15:00">
+    <option value="16:00">
+    <option value="17:00">
+    <option value="18:00">
+</datalist>
+
+        <div class="mb-3">
+            <label for="ground_type" class="form-label">Select Ground</label>
+            <select class="form-control" id="ground_type" name="ground_type" required>
+                <option value="old_bay">OLD Bay</option>
+                <option value="new_bay">New Bay</option>
+                <option value="eds">EDS</option>
+                <option value="waste_burning">Waste Burning</option>
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary">Book Slot</button>
+    </form>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+ 
+
+</body>
+</html>
+
+*****************************************END of new_booking.php****************************************************
+
+
+
+script.js
+document.addEventListener("DOMContentLoaded", function () {
+    let selectedDateElement = document.querySelector(".selected-day");
+    if (selectedDateElement) {
+        selectedDateElement.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+});
+*****************************************END of script.js****************************************************
+
+
+
+
+style.css
+/* style.css */
+/* General Styling */
+body {
+  font-family: 'Poppins', sans-serif;
+  background-color: #f8f9fa;
+  margin: 0;
+  padding: 0;
+}
+
+.container {
+  width: 95%;
+  margin: auto;
+  background: white;
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+/* Navbar */
+.navbar {
+  background: #007BFF;
+  padding: 12px;
+  text-align: center;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.navbar a {
+  color: white;
+  text-decoration: none;
+  margin: 10px;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.navbar a:hover {
+  color: #f8f9fa;
+  text-decoration: underline;
+}
+
+/* Table Styling */
+.table-container {
+  background: #ffffff;
+  padding: 20px;
+  border-radius: 10px;
+  box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.table th, .table td {
+  border: 1px solid #ddd;
+  padding: 12px;
+  text-align: center;
+  font-size: 14px;
+}
+
+.table th {
+  background-color: #007BFF;
+  color: white;
+  font-weight: bold;
+}
+
+.table tbody tr:hover {
+  background-color: #f1f1f1;
+  transition: 0.3s ease-in-out;
+}
+
+/* Buttons */
+.btn {
+  padding: 8px 15px;
+  border: none;
+  background: #007BFF;
+  color: white;
+  cursor: pointer;
+  text-decoration: none;
+  border-radius: 6px;
+  font-size: 14px;
+  transition: all 0.3s ease-in-out;
+}
+
+.btn:hover {
+  background: #0056b3;
+  transform: scale(1.05);
+}
+
+.btn-secondary {
+  background: #6c757d;
+}
+
+.btn-secondary:hover {
+  background: #495057;
+}
+
+/* Calendar */
+/* Calendar Container */
+.calendar-nav {
+  display: flex;
+  justify-content: center; /* Centers content */
+  align-items: center;
+  gap: 20px; /* Space between elements */
+  text-align: center;
+  margin-bottom: 10px;
+}
+
+.calendar-nav a {
+  color: #000;
+  font-size: 18px;
+  text-decoration: none;
+  padding: 5px 10px;
+}
+
+.calendar-nav h6 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+
+/* Calendar Table */
+.calendar {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.calendar th, .calendar td {
+  width: 14.28%;
+  text-align: center;
+  padding: 10px;
+  border: 1px solid #ddd;
+}
+
+.calendar th {
+  background: #007bff;
+  color: white;
+  font-weight: bold;
+}
+
+.calendar td {
+  height: 50px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.calendar td a {
+  display: block;
+  text-decoration: none;
+  color: #000;
+  padding: 5px;
+  border-radius: 4px;
+}
+
+.calendar td a:hover {
+  background: #007bff;
+  color: white;
+}
+
+/* Selected and Current Day */
+.selected-day a {
+  background: #28a745;
+  color: white;
+}
+
+.current-day a {
+  background: #ffc107;
+  color: black;
+  font-weight: bold;
+}
+
+/* Time Slots */
+.time-slot {
+  position: relative;
+  height: 40px;
+  background: #f8f9fa;
+  border-radius: 5px;
+  padding: 5px;
+}
+
+.moving-line {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background-color: red;
+  z-index: 1000;
+  animation: moveLine 5s linear infinite;
+}
+
+@keyframes moveLine {
+  0% { top: 0; }
+  100% { top: 100%; }
+}
+
+/* Modal Styling */
+.modal-content {
+  border-radius: 10px;
+  padding: 15px;
+}
+
+.modal-header {
+  background: #007BFF;
+  color: white;
+  border-radius: 10px 10px 0 0;
+  padding: 15px;
+}
+
+.modal-footer {
+  background: #f1f1f1;
+  border-radius: 0 0 10px 10px;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .container {
+    width: 100%;
+    padding: 10px;
+  }
+
+  .table th, .table td {
+    padding: 8px;
+    font-size: 12px;
+  }
+}
+
+
+
+
+*****************************************END of style.css****************************************************
+
+
+//edit_booking.php
+<?php
+include 'db.php';
+
+if (isset($_GET['start_time'], $_GET['end_time'], $_GET['ground'])) {
+    $start_time = $_GET['start_time'];
+    $end_time = $_GET['end_time'];
+    $ground = $_GET['ground'];
+
+    // Debug: Print values to check if they are received correctly
+    // echo "Start Time: " . htmlspecialchars($start_time) . "<br>";
+    // echo "End Time: " . htmlspecialchars($end_time) . "<br>";
+    // echo "Ground: " . htmlspecialchars($ground) . "<br>";
+
+    // Fetch existing booking details
+    $query = "SELECT * FROM bookings WHERE start_time = ? AND end_time = ? AND ground_type = ?";
+    $stmt = $conn->prepare($query);
+    $stmt->bind_param("sss", $start_time, $end_time, $ground);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $booking = $result->fetch_assoc();
+
+    if (!$booking) {
+        echo "Booking not found.";
+        exit;
+    }
+} else {
+    echo "Invalid request.";
+    exit;
+}
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edit Booking</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+</head>
+<body>
+    <div class="container mt-4">
+        <h2 class="mb-3 text-center">Edit Booking</h2>
+        <form action="update_booking.php" method="POST">
+            <input type="hidden" name="booking_id" value="<?= htmlspecialchars($booking['id']) ?>">
+
+            <div class="mb-3">
+                <label class="form-label">Requisition No</label>
+                <input type="text" class="form-control" name="requisition_no" value="<?= htmlspecialchars($booking['requisition_no']) ?>" readonly>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Date of Requisition</label>
+                <input type="date" class="form-control" name="date_of_requisition" value="<?= htmlspecialchars($booking['date_of_requisition']) ?>" readonly>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Name of Division</label>
+                <input type="text" class="form-control" name="division" value="<?= htmlspecialchars($booking['division']) ?>" readonly>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Proposed Date and Time</label>
+                <input type="datetime-local" class="form-control" name="proposed_date_time" value="<?= htmlspecialchars($booking['proposed_date_time']) ?>">
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Start Time</label>
+                <input type="time" class="form-control" name="start_time" value="<?= htmlspecialchars($booking['start_time']) ?>" readonly>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">End Time</label>
+                <input type="time" class="form-control" name="end_time" value="<?= htmlspecialchars($booking['end_time']) ?>">
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Select Ground</label>
+                <select class="form-control" name="ground">
+                    <option value="old_bay" <?= ($booking['ground_type'] == 'old_bay') ? 'selected' : '' ?>>Old Bay</option>
+                    <option value="new_bay" <?= ($booking['ground_type'] == 'new_bay') ? 'selected' : '' ?>>New Bay</option>
+                    <option value="eds" <?= ($booking['ground_type'] == 'eds') ? 'selected' : '' ?>>EDS</option>
+                    <option value="waste_burning" <?= ($booking['ground_type'] == 'waste_burning') ? 'selected' : '' ?>>Waste Burning</option>
+                </select>
+            </div>
+
+            <button type="submit" class="btn btn-primary">Update Booking</button>
+            <a href="index.php" class="btn btn-secondary">Cancel</a>
+        </form>
+    </div>
+</body>
+</html>
+
+
+
+*****************************************END of Edit_booking.php****************************************************
+
+
+
+//update_booking.php
+<?php
+include 'db.php';
+
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    $booking_id = $_POST['booking_id'];
+    $proposed_date_time = $_POST['proposed_date_time'];
+    $end_time = $_POST['end_time'];
+    $ground = $_POST['ground'];
+
+    // Update query to modify booking details
+    $query = "UPDATE bookings SET proposed_date_time = ?, end_time = ?, ground_type = ? WHERE id = ?";
+    $stmt = $conn->prepare($query);
+    $stmt->bind_param("sssi", $proposed_date_time, $end_time, $ground, $booking_id);
+
+    if ($stmt->execute()) {
+        // Redirect to homepage after successful update
+        header("Location: index.php?message=Booking updated successfully");
+        exit;
+    } else {
+        echo "Error updating booking: " . $conn->error;
+    }
+}
+?>
+
+*****************************************END of Edit_booking.php****************************************************
