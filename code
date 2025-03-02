@@ -627,44 +627,53 @@ while ($row = $result->fetch_assoc()) {
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
 </head>
 <body>
-
 <div class="container mt-4">
     <h2 class="mb-3 text-center">New Booking</h2>
-
     <form action="new_booking.php" method="POST">
-        <div class="mb-3">
-            <label for="requisition_no" class="form-label">Requisition No</label>
-            <input type="text" class="form-control" name="requisition_no" value="<?= $requisition_no ?>" readonly>
+        <div class="row mb-3">
+            <div class="col-md-4">
+                <label for="requisition_no" class="form-label">Requisition No</label>
+                <input type="text" class="form-control" name="requisition_no" value="<?= $requisition_no ?>" readonly>
+            </div>
+            <div class="col-md-4">
+                <label for="date_of_requisition" class="form-label">Date of Requisition</label>
+                <input type="date" class="form-control" name="date_of_requisition" value="<?= date('Y-m-d') ?>" readonly>
+            </div>
+            <div class="col-md-4">
+                <label for="division" class="form-label">Name of Division</label>
+                <input type="text" class="form-control" name="division" required>
+            </div>
         </div>
 
-        <div class="mb-3">
-            <label for="date_of_requisition" class="form-label">Date of Requisition</label>
-            <input type="date" class="form-control" name="date_of_requisition" value="<?= date('Y-m-d') ?>" readonly>
+        <div class="row mb-3">
+            <div class="col-md-4">
+                <label for="proposed_date_time" class="form-label">Proposed Date and Time</label>
+                <input type="datetime-local" class="form-control" name="proposed_date_time" required>
+            </div>
+            <div class="col-md-4">
+                <label for="start_time" class="form-label">Start Time</label>
+                <input type="time" class="form-control" name="start_time" min="09:00" max="18:00" required>
+            </div>
+            <div class="col-md-4">
+                <label for="end_time" class="form-label">End Time</label>
+                <input type="time" class="form-control" name="end_time" min="09:00" max="18:00" required>
+            </div>
         </div>
 
-        <div class="mb-3">
-            <label for="division" class="form-label">Name of Division</label>
-            <input type="text" class="form-control" name="division" required>
-        </div>
-
-        <div class="mb-3">
-            <label for="proposed_date_time" class="form-label">Proposed Date and Time</label>
-            <input type="datetime-local" class="form-control" name="proposed_date_time" required>
-        </div>
-
-        <div class="mb-3">
-            <label for="start_time" class="form-label">Start Time</label>
-            <input type="time" class="form-control" name="start_time" min="09:00" max="18:00" required>
-        </div>
-
-        <div class="mb-3">
-            <label for="end_time" class="form-label">End Time</label>
-            <input type="time" class="form-control" name="end_time" min="09:00" max="18:00" required>
-        </div>
-
-        <div class="mb-3">
-            <label for="external_count" class="form-label">Number of External Users</label>
-            <input type="number" class="form-control" id="external_count" name="external_count" min="0" max="10" onchange="generateExternalUserTable()">
+        <div class="row mb-3">
+            <div class="col-md-6">
+                <label for="external_count" class="form-label">Number of External Users</label>
+                <input type="number" class="form-control" id="external_count" name="external_count" min="0" max="10" onchange="generateExternalUserTable()">
+            </div>
+            <div class="col-md-6">
+                <label for="ground_type" class="form-label">Select Ground</label>
+                <select class="form-control" name="ground_type" required>
+                    <option value="">-- Select Ground --</option>
+                    <?php foreach ($grounds as $ground) : ?>
+                        <option value="<?= htmlspecialchars($ground) ?>"><?= htmlspecialchars($ground) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
         </div>
 
         <div class="mb-3">
@@ -679,16 +688,6 @@ while ($row = $result->fetch_assoc()) {
                 </thead>
                 <tbody id="external_user_tbody"></tbody>
             </table>
-        </div>
-
-        <div class="mb-3">
-            <label for="ground_type" class="form-label">Select Ground</label>
-            <select class="form-control" name="ground_type" required>
-                <option value="">-- Select Ground --</option>
-                <?php foreach ($grounds as $ground) : ?>
-                    <option value="<?= htmlspecialchars($ground) ?>"><?= htmlspecialchars($ground) ?></option>
-                <?php endforeach; ?>
-            </select>
         </div>
 
         <button type="submit" class="btn btn-primary">Book Slot</button>
@@ -712,9 +711,9 @@ function generateExternalUserTable() {
     }
 }
 </script>
+
 </body>
 </html>
-
 
 *****************************************END of new_booking.php****************************************************
 
