@@ -1,115 +1,223 @@
 <?php
-include 'config.php';
+// ---------- DB Connection ----------
+$host = "localhost";
+$user = "root";
+$pass = "root123";
+$db   = "test_db";
 
-// Pagination Logic
-$limit = 10; // rows per page
-$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
-if($page < 1) $page = 1;
+$conn = new mysqli($host, $user, $pass, $db);
+if ($conn->connect_error) die("DB connect failed: " . $conn->connect_error);
 
-$offset = ($page - 1) * $limit;
+// ---------- Helpers ----------
+function remove_bom($s) {
+    return preg_replace('/^\xEF\xBB\xBF/','',$s);
+}
+function excelSerialToDate($serial) {
+    if (!is_numeric($serial)) return null;
+    $unix = ($serial - 25569) * 86400;
+    return gmdate('Y-m-d', intval($unix));
+}
+function excelSerialToTime($serial) {
+    if (!is_numeric($serial)) return null;
+    $seconds = intval(($serial - floor($serial)) * 86400 + 0.5);
+    return gmdate('H:i:s', $seconds);
+}
+function try_parse_date($s) {
+    $s = trim($s); 
+    if ($s === '') return null;
+    if (is_numeric($s) && floatval($s) > 59) return excelSerialToDate(floatval($s));
+    $formats = ['d/m/Y','j/n/Y','d-m-Y','Y-m-d','d/m/y','m/d/Y','d M Y','Y-m-d H:i:s'];
+    foreach ($formats as $fmt) {
+        $dt = DateTime::createFromFormat($fmt, $s);
+        if ($dt !== false && !DateTime::getLastErrors()['warning_count'] && !DateTime::getLastErrors()['error_count'])
+            return $dt->format('Y-m-d');
+    }
+    $t = strtotime($s);
+    return ($t !== false && $t > 0) ? date('Y-m-d', $t) : null;
+}
+function try_parse_time($s) {
+    $s = trim($s);
+    if ($s === '' || strtoupper($s) === 'N/A') return null;
+    if (is_numeric($s) && floatval($s) > 0 && floatval($s) < 2) return excelSerialToTime(floatval($s));
+    $formats = ['H:i:s','H:i','g:i a','g:i A','h:i A','h:i a'];
+    foreach ($formats as $fmt) {
+        $dt = DateTime::createFromFormat($fmt, $s);
+        if ($dt !== false && !DateTime::getLastErrors()['warning_count'] && !DateTime::getLastErrors()['error_count'])
+            return $dt->format('H:i:s');
+    }
+    $t = strtotime($s);
+    return ($t !== false) ? date('H:i:s', $t) : null;
+}
 
-// Fetch Data
-$sql = "SELECT * FROM users LIMIT $limit OFFSET $offset"; // replace with your table name
-$result = $conn->query($sql);
+// ---------- File Upload ----------
+$inserted = $skipped = 0;
 
-// Get total rows for pagination
-$total_sql = "SELECT COUNT(*) AS total FROM users";
-$total_result = $conn->query($total_sql);
-$total_row = $total_result->fetch_assoc();
-$total_rows = $total_row['total'];
-$total_pages = ceil($total_rows / $limit);
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['csvFile'])) {
+    $fileTmp = $_FILES['csvFile']['tmp_name'];
+
+    if (!file_exists($fileTmp)) die("File upload failed.");
+
+    $handle = fopen($fileTmp, "r");
+    if ($handle === false) die("Unable to open uploaded CSV file.");
+
+    $rowNum = 0;
+    $dateCol = $inCol = $outCol = $statusCol = null;
+    $emp_id = $emp_name = "";
+    $dataStarted = false;
+
+    while (($row = fgetcsv($handle, 0, ",")) !== false) {
+        $rowNum++;
+        foreach ($row as $i => $c) $row[$i] = trim(remove_bom($c));
+        $lineText = implode(" ", $row);
+
+        // Detect new employee block
+        if (preg_match('/\b(\d{3,})\s*\(\s*([^)]+)\s*\)/', $lineText, $m)) {
+            $emp_id = trim($m[1]);
+            $emp_name = trim($m[2]);
+            $dataStarted = false;
+            $dateCol = $inCol = $outCol = $statusCol = null;
+            continue;
+        }
+
+        // Detect start of attendance table
+        if (!$dataStarted) {
+            foreach ($row as $i => $cell) {
+                if (preg_match('/^\s*Date\s*$/i', $cell)) {
+                    $dateCol = $i;
+                    $dataStarted = true;
+                    foreach ($row as $j => $h) {
+                        $hLow = strtolower($h);
+                        if (strpos($hLow, 'in') !== false && $inCol === null) $inCol = $j;
+                        if (strpos($hLow, 'out') !== false && $outCol === null) $outCol = $j;
+                        if ((strpos($hLow, 'status') !== false || strpos($hLow, 'remark') !== false) && $statusCol === null) $statusCol = $j;
+                    }
+                    continue 2;
+                }
+            }
+            continue;
+        }
+
+        // Parse attendance rows
+        $dateParsed = try_parse_date($row[$dateCol] ?? '');
+        $inParsed   = isset($row[$inCol]) ? try_parse_time($row[$inCol]) : null;
+        $outParsed  = isset($row[$outCol]) ? try_parse_time($row[$outCol]) : null;
+        $status     = isset($row[$statusCol]) ? trim($row[$statusCol]) : '';
+
+        if (strtoupper($status) === 'A') {
+            $inParsed = "00:00:00";
+            $outParsed = "00:00:00";
+        }
+
+        $statusValue = ($status !== '' ? $status : 'N/A');
+
+        if ($dateParsed === null && $inParsed === null && $outParsed === null && $status === '') {
+            $skipped++; 
+            continue;
+        }
+
+        // Insert or update if duplicate (emp_id + date must be unique)
+        $sql = "INSERT INTO employee_attendance (emp_id, emp_name, date, in_time, out_time, status)
+            VALUES (
+                '".$conn->real_escape_string($emp_id)."',
+                '".$conn->real_escape_string($emp_name)."',
+                ".($dateParsed ? "'".$conn->real_escape_string($dateParsed)."'" : "NULL").",
+                '".$conn->real_escape_string($inParsed)."',
+                '".$conn->real_escape_string($outParsed)."',
+                '".$conn->real_escape_string($statusValue)."'
+            )
+            ON DUPLICATE KEY UPDATE
+                emp_name = VALUES(emp_name),
+                in_time = VALUES(in_time),
+                out_time = VALUES(out_time),
+                status = VALUES(status)";
+
+        if ($conn->query($sql) === TRUE) {
+            $inserted++;
+        } else {
+            $skipped++;
+        }
+    }
+
+    fclose($handle);
+
+    // Redirect to show alert without resubmitting the form
+    header("Location: ".$_SERVER['PHP_SELF']."?inserted={$inserted}&skipped={$skipped}");
+    exit;
+}
+$conn->close();
 ?>
-
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Pagination Example</title>
+    <title>Upload Attendance CSV</title>
     <style>
-        table { border-collapse: collapse; width: 80%; margin: 20px auto; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
-        th { background-color: #f2f2f2; }
-        .pagination {
-    text-align: center;
-    margin: 20px;
-}
-
-.pagination a {
-    margin: 0 5px;
-    text-decoration: none;
-    color: #007BFF;
-}
-
-.pagination strong {
-    margin: 0 5px;
-    font-weight: bold;
-    color: black;
-}
-
-.pagination button {
-    padding: 5px 10px;
-    background-color: #007BFF;
-    color: white;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    margin: 0 5px;
-}
-
-.pagination button:disabled {
-    background-color: #ccc;
-    cursor: not-allowed;
-}
-
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f7f9fc;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .upload-container {
+            background-color: #fff;
+            padding: 30px 40px;
+            border-radius: 10px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+            text-align: center;
+            width: 400px;
+        }
+        h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+        input[type="file"] {
+            display: block;
+            margin: 20px auto;
+            font-size: 16px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
     </style>
 </head>
 <body>
+    <div class="upload-container">
+        <h2>Upload Attendance CSV File</h2>
+        <form method="post" enctype="multipart/form-data">
+            <input type="file" name="csvFile" accept=".csv" required>
+            <button type="submit">Upload & Import</button>
+        </form>
 
-<h2 style="text-align:center;">Data Table with Pagination</h2>
-
-<table>
-    <tr>
-        <th>ID</th>
-        <th>Name</th>
-        <th>Email</th>
-        <!-- Add more columns as per your table -->
-    </tr>
-    <?php
-    if ($result->num_rows > 0) {
-        while($row = $result->fetch_assoc()) {
-            echo "<tr>
-                    <td>".$row['id']."</td>
-                    <td>".$row['name']."</td>
-                    <td>".$row['email']."</td>
-                  </tr>";
+        <?php
+        // Show alert after redirect
+        if (isset($_GET['inserted']) && isset($_GET['skipped'])) {
+            $inserted = intval($_GET['inserted']);
+            $skipped = intval($_GET['skipped']);
+            echo "<script>
+                alert('Upload complete. Inserted: {$inserted}, Skipped: {$skipped}.');
+                window.history.replaceState({}, document.title, '{$_SERVER['PHP_SELF']}');
+            </script>";
         }
-    } else {
-        echo "<tr><td colspan='3'>No records found.</td></tr>";
-    }
-    ?>
-</table>
-
-<div class="pagination">
-    <?php
-    // Previous Button
-    echo "<button " . ($page <= 1 ? "disabled" : "") . " onclick=\"window.location='?page=" . ($page - 1) . "'\">Previous</button>";
-
-    // Page Numbers
-    for ($i = 1; $i <= $total_pages; $i++) {
-        if ($i == $page) {
-            echo "<strong>$i</strong> ";
-        } else {
-            echo "<a href='?page=$i'>$i</a> ";
-        }
-    }
-
-    // Next Button
-    echo "<button " . ($page >= $total_pages ? "disabled" : "") . " onclick=\"window.location='?page=" . ($page + 1) . "'\">Next</button>";
-    ?>
-</div>
-
+        ?>
+    </div>
 </body>
 </html>
+<!-- 
+USE test_db; CREATE TABLE IF NOT EXISTS employee_attendance ( id INT AUTO_INCREMENT PRIMARY KEY, emp_id VARCHAR(50), emp_name VARCHAR(100), date DATE, in_time VARCHAR(20), out_time VARCHAR(20), status VARCHAR(20) );
 
-<?php
-$conn->close();
-?>
+ALTER TABLE employee_attendance
+ADD UNIQUE KEY unique_emp_date (emp_id, date);
+
+-->
